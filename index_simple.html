@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Insight Engine | Harga Kripto</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f4fd8'/%3E%3Cpath d='M6 22l7-8 5 4 8-10' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  body{font:16px/1.5 system-ui,sans-serif;color:#1a2433;margin:0;background:#fff}
+  header,main,footer{max-width:960px;margin:0 auto;padding:0 20px}
+  header{padding-top:32px}
+  h1{margin:0;font-size:28px}
+  h2{font-size:18px;margin:32px 0 12px}
+  .sub,#status{color:#5b6b7a;margin:4px 0 0}
+  .tabel{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:10px 8px;border-bottom:1px solid #e3e8ee;text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{font-size:13px;color:#5b6b7a;font-weight:600}
+  .naik{color:#0b7a5e}
+  .turun{color:#c0392b}
+  .kontrol{display:flex;gap:8px;margin-bottom:12px}
+  select{font:inherit;padding:6px 10px;border:1px solid #cfd6de;border-radius:6px;background:#fff}
+  .kotak{position:relative;height:320px}
+  #error{background:#fdecea;padding:10px 14px;border-radius:6px;margin-top:16px}
+  footer{color:#5b6b7a;font-size:14px;padding:32px 20px}
+</style>
+</head>
+<body>
+
+<!-- ========== BAGIAN HTML: kerangka halaman (3 bagian + footer) ========== -->
+
+<!-- A. Judul dan status data -->
+<header>
+  <h1>Insight Engine</h1>
+  <p class="sub">Harga 8 koin kripto, data otomatis dari Google Sheets</p>
+  <p id="status">Memuat data...</p>
+</header>
+
+<main>
+  <div id="error" hidden></div>
+
+  <!-- B. Tabel harga terbaru -->
+  <h2>Harga terbaru</h2>
+  <div class="tabel">
+    <table>
+      <thead><tr><th>Koin</th><th>Harga</th><th>Perubahan 24 jam</th><th>Market cap</th><th>Volume 24 jam</th></tr></thead>
+      <tbody id="isiTabel"></tbody>
+    </table>
+  </div>
+
+  <!-- C. Grafik harga -->
+  <h2>Grafik harga</h2>
+  <div class="kontrol">
+    <select id="pilihKoin"></select>
+    <select id="pilihRentang">
+      <option value="1">1 hari</option>
+      <option value="7" selected>7 hari</option>
+      <option value="30">30 hari</option>
+      <option value="all">Semua</option>
+    </select>
+  </div>
+  <div class="kotak"><canvas id="grafik"></canvas></div>
+</main>
+
+<footer>Insight Engine, proyek kuliah kelompok. Sumber data: CoinGecko API, disimpan di Google Sheets.</footer>
+
+<script>
+/* ========== BAGIAN JAVASCRIPT: 6 langkah ========== */
+
+/* LANGKAH 1. PENGATURAN
+   Semua hal yang mungkin diubah ditaruh di sini. */
+const URL_API = "https://script.google.com/macros/s/AKfycbwafEcIk7CbxAisTnQBv46vhlobhoP7vLRR2mhEnjLrne47SCXtTkNMy0Qp2KD_p_HV/exec";
+const REFRESH_MENIT = 3;   // cek data baru tiap 3 menit
+const KOIN = [             // [id di spreadsheet, nama, simbol]
+  ["bitcoin", "Bitcoin", "BTC"],
+  ["ethereum", "Ethereum", "ETH"],
+  ["solana", "Solana", "SOL"],
+  ["ripple", "XRP", "XRP"],
+  ["dogecoin", "Dogecoin", "DOGE"],
+  ["polygon-ecosystem-token", "Polygon", "POL"],
+  ["tether", "Tether", "USDT"],
+  ["chainlink", "Chainlink", "LINK"]
+];
+
+let data = [];   // menyimpan semua baris data dari spreadsheet
+let grafik;      // menyimpan objek grafik yang sedang tampil
+
+/* LANGKAH 2. ALAT BANTU
+   Fungsi kecil untuk memperpendek kode dan merapikan angka. */
+const $ = id => document.getElementById(id);
+const usd = n => "$" + n.toLocaleString("en-US", { maximumFractionDigits: n >= 1 ? 2 : 6 });
+const ringkas = n => "$" + n.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 });
+
+/* LANGKAH 3. AMBIL DATA
+   Meminta data ke Apps Script (yang membaca Google Sheets), lalu menyimpannya di variabel data.
+   Setiap baris dari spreadsheet berbentuk: [timestamp, coin_id, harga, market_cap, volume, perubahan]. */
+async function ambilData() {
+  try {
+    const respon = await fetch(URL_API + "?days=" + $("pilihRentang").value);
+    const hasil = await respon.json();
+
+    data = hasil.rows
+      .map(b => ({ waktu: new Date(b[0]), koin: b[1], harga: +b[2], mcap: +b[3], vol: +b[4], ubah: +b[5] }))
+      .filter(b => b.mcap > 0 && KOIN.some(k => k[0] === b.koin));   // buang baris rusak / koin lain
+
+    $("error").hidden = true;
+    tampilkanStatus();
+    tampilkanTabel();
+    tampilkanGrafik();
+  } catch (e) {
+    $("error").hidden = false;
+    $("error").textContent = "Gagal memuat data: " + e.message;
+  }
+}
+
+/* LANGKAH 4. TAMPILKAN STATUS
+   Menunjukkan kapan data terakhir masuk. */
+function tampilkanStatus() {
+  const terakhir = data[data.length - 1];
+  const menit = Math.round((Date.now() - terakhir.waktu) / 60000);
+  $("status").textContent = "Data terakhir: " + terakhir.waktu.toLocaleString("id-ID") + " (" + menit + " menit lalu)";
+}
+
+/* LANGKAH 5. TAMPILKAN TABEL
+   Mengambil baris paling baru untuk tiap koin, lalu menyusunnya jadi baris tabel. */
+function tampilkanTabel() {
+  const terbaru = {};
+  data.forEach(b => terbaru[b.koin] = b);   // baris terakhir menimpa yang lama
+
+  $("isiTabel").innerHTML = KOIN.map(([id, nama, simbol]) => {
+    const b = terbaru[id];
+    if (!b) return "";
+    return `<tr>
+      <td>${nama} <small>${simbol}</small></td>
+      <td>${usd(b.harga)}</td>
+      <td class="${b.ubah >= 0 ? "naik" : "turun"}">${b.ubah.toFixed(2)}%</td>
+      <td>${ringkas(b.mcap)}</td>
+      <td>${ringkas(b.vol)}</td>
+    </tr>`;
+  }).join("");
+}
+
+/* LANGKAH 6. TAMPILKAN GRAFIK
+   Memilih data satu koin, lalu menggambarnya sebagai grafik garis dengan Chart.js. */
+function tampilkanGrafik() {
+  const baris = data.filter(b => b.koin === $("pilihKoin").value);
+  if (grafik) grafik.destroy();   // hapus grafik lama sebelum menggambar yang baru
+
+  grafik = new Chart($("grafik"), {
+    type: "line",
+    data: {
+      labels: baris.map(b => b.waktu.toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })),
+      datasets: [{ data: baris.map(b => b.harga), borderColor: "#1f4fd8", borderWidth: 2, pointRadius: 0 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { ticks: { maxTicksLimit: 6 } } }
+    }
+  });
+}
+
+/* MENJALANKAN SEMUANYA
+   Isi pilihan koin, pasang reaksi ke pilihan pengguna, lalu mulai. */
+$("pilihKoin").innerHTML = KOIN.map(k => `<option value="${k[0]}">${k[1]}</option>`).join("");
+$("pilihKoin").onchange = tampilkanGrafik;                  // ganti koin: gambar ulang grafik saja
+$("pilihRentang").onchange = () => { $("status").textContent = "Memuat data..."; ambilData(); };   // ganti rentang: ambil data lagi
+ambilData();                                                // pertama kali halaman dibuka
+setInterval(ambilData, REFRESH_MENIT * 60 * 1000);          // lalu ulangi tiap 3 menit
+</script>
+</body>
+</html>
